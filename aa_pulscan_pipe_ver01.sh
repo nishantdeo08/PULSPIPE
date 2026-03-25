@@ -88,7 +88,7 @@ echo "Step_5_CrossDM_Harmonic,$((SECONDS - START)),$?" >> "$TIMING_LOG"
 echo "Step 6: Final RFI Mitigation..."
 START=$SECONDS
 python3 rfi_dm_curve_filter.py \
-    --input_dir "$SYNC_DIR" \  # Points to synchronized output now
+    --input_dir "$SYNC_DIR" \
     --output_file "$BASE_DIR/output/final_pulsar_candidates.csv" \
     --freq_tol "$FREQ_TOL" \
     --dm_persistence "$DM_PERSIST" \
