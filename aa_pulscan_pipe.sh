@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# --- 1. USER CONFIGURATION (Thresholds & Arguments) ---
+# Usage: ./aa_pulscan_pipe.sh [data_path] [low_th] [high_th] [sort_col] [order_flag]
+DATA_PATH=${1:-"/default/path/to/data.fil"}
+LOW_TH=${2:-5}
+HIGH_TH=${3:-100}
+SORT_COL=${4:-2}
+ORDER_FLAG=${5:-1}
+
+# --- 2. PIPELINE PARAMETERS ---
+# Harmonic Filtering
+H_TOLERANCE=0.001
+H_THREADS=8
+H_LIST="0.1 0.111 0.125 0.142 0.166 0.2 0.25 0.333 0.5 1 2 3 4 5 6 7 8 9 10"
+
+# RFI Mitigation
+FREQ_TOL=0.003
+DM_PERSIST=0.1
+PEAK_RATIO=1.2
+
+# --- 3. PATH SETTINGS ---
+TEMPLATE_FILE="../../input_files/aa_test_input_file.txt"
+WORKING_FILE="../../input_files/aa_test_input_file_copy.txt"
+BASE_DIR="/lustre_archive/spotlight/Nishant/AA_PULSCAN_TEST/DATA"
+OUTPUT_DIR="$BASE_DIR/output/aa_test_input_file_copy"
+
+# --- 4. PREPARATION ---
+rm -f "$WORKING_FILE"
+head -n -1 "$TEMPLATE_FILE" > "$WORKING_FILE"
+printf "file %s\n" "$DATA_PATH" >> "$WORKING_FILE"
+
+source /lustre_archive/apps/tdsoft/env.sh
+source ../environment.sh
+
+# --- 5. EXECUTION ---
+
+echo "Step 1: Running Astro-Accelerate..."
+../astro-accelerate.sh "$WORKING_FILE" "$BASE_DIR"
+
+echo "Step 2: Candidate Sifting (Thresholds: $LOW_TH to $HIGH_TH)..."
+# This script produces a file named *_processed.csv
+./process_data.sh "$OUTPUT_DIR/global_pulscan_candidates.csv" "$LOW_TH" "$HIGH_TH" "$SORT_COL" "$ORDER_FLAG"
+
+echo "Step 3: Splitting by DM..."
+# We point this to the processed file generated in Step 2
+./split_by_dm.sh "$OUTPUT_DIR/global_pulscan_candidates_processed.csv"
+
+echo "Step 4: Parallel Harmonic Filtering (Intra-DM)..."
+python3 parallel_harmonic_filter.py \
+    --input_dir "$BASE_DIR/output/dm_split_results" \
+    --tolerance "$H_TOLERANCE" \
+    --harmonics $H_LIST \
+    --threads "$H_THREADS"
+
+echo "Step 5: Harmonic Synchronization (Cross-DM)..."
+python3 process_harmonics.py \
+    --input_dir "$BASE_DIR/output/dm_filtered_results/" \
+    --tol "$H_TOLERANCE" \
+    --harmonics $H_LIST
+
+echo "Step 6: Final RFI Mitigation..."
+python3 rfi_dm_curve_filter.py \
+    --input_dir "$BASE_DIR/output/dm_filtered_results" \
+    --output_file "$BASE_DIR/output/final_pulsar_candidates.csv" \
+    --freq_tol "$FREQ_TOL" \
+    --dm_persistence "$DM_PERSIST" \
+    --peak_ratio "$PEAK_RATIO"
+
+echo "------------------------------------------------"
+echo "Pipeline Complete. Results: $BASE_DIR/output/final_pulsar_candidates.csv"
