@@ -7,21 +7,28 @@ import sys
 
 def process_harmonics():
     parser = argparse.ArgumentParser(description="Harmonic frequency synchronizer for pulsar candidates.")
-    
+
     # Path Arguments
     parser.add_argument("--input_dir", type=str, required=True, help="Directory containing candidate CSV files")
+    parser.add_argument("--output_dir", type=str, required=True, help="Directory to save synchronized CSV files")
     
+    # Debug Arguments
+    parser.add_argument("--debug", action="store_false", dest="no_debug", help="Turn off debug logging (default is ON)")
+    parser.set_defaults(no_debug=True)
+
     # Physics/Threshold Arguments
-    parser.add_argument("--tol", type=float, default=0.0001, help="Relative tolerance for harmonic matching (default: 0.0001)")
-    parser.add_argument("--harmonics", type=float, nargs='+', 
+    parser.add_argument("--tol", type=float, default=0.0001, help="Relative tolerance for harmonic matching")
+    parser.add_argument("--harmonics", type=float, nargs='+',
                         default=[0.1, 0.111, 0.125, 0.142, 0.166, 0.2, 0.25, 0.333, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-                        help="Space-separated list of harmonic multiples to check (e.g. 0.5 1 2)")
-    
-    # Column Name Arguments (In case your CSV headers change)
-    parser.add_argument("--freq_col", type=str, default="frequency_hz", help="Name of the frequency column")
-    parser.add_argument("--sigma_col", type=str, default="sigma", help="Name of the SNR/Sigma column")
+                        help="Space-separated list of harmonic multiples")
+
+    parser.add_argument("--freq_col", type=str, default="frequency_hz", help="Name of frequency column")
+    parser.add_argument("--sigma_col", type=str, default="sigma", help="Name of SNR/Sigma column")
 
     args = parser.parse_args()
+
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
 
     # 1. Load all data
     pattern = os.path.join(args.input_dir, "*.csv")
@@ -35,7 +42,7 @@ def process_harmonics():
         try:
             df = pd.read_csv(f)
             if not df.empty:
-                df['source_file'] = f  # Track origin for step 4
+                df['source_file'] = os.path.basename(f)
                 all_candidates.append(df)
         except Exception as e:
             print(f"Error reading {f}: {e}")
@@ -51,6 +58,9 @@ def process_harmonics():
     # 2. Identify Harmonic Groups
     print(f"Processing {len(master_df)} rows for harmonic grouping...")
     
+    # Sort by sigma descending so we find strongest leads first
+    master_df = master_df.sort_values(by=args.sigma_col, ascending=False).reset_index(drop=True)
+
     for i in range(len(master_df)):
         if master_df.loc[i, 'group_id'] != -1:
             continue
@@ -58,7 +68,6 @@ def process_harmonics():
         master_df.loc[i, 'group_id'] = group_counter
         base_freq = master_df.loc[i, args.freq_col]
 
-        # Compare against all other ungrouped rows
         for j in range(i + 1, len(master_df)):
             if master_df.loc[j, 'group_id'] != -1:
                 continue
@@ -77,22 +86,43 @@ def process_harmonics():
 
         group_counter += 1
 
-    # 3. Synchronize frequencies to the 'best' (max sigma) candidate in the group
-    print(f"Found {group_counter} harmonic groups. Synchronizing...")
-    for gid in range(group_counter):
-        group_indices = master_df[master_df['group_id'] == gid].index
-        if len(group_indices) > 0:
-            max_sigma_idx = master_df.loc[group_indices, args.sigma_col].idxmax()
-            best_freq = master_df.loc[max_sigma_idx, args.freq_col]
-            master_df.loc[group_indices, args.freq_col] = best_freq
+    # 3. Synchronize frequencies and Log Debug info
+    debug_content = []
+    debug_content.append(f"Harmonic Grouping Report - Found {group_counter} unique groups\n" + "="*60)
 
-    # 4. Save results back to original files
-    for f in files:
-        original_file_data = master_df[master_df['source_file'] == f].copy()
-        # Clean up helper columns
-        original_file_data = original_file_data.drop(columns=['source_file', 'group_id'])
-        original_file_data.to_csv(f, index=False)
-        print(f"Updated: {os.path.basename(f)}")
+    for gid in range(group_counter):
+        group_mask = master_df['group_id'] == gid
+        group_df = master_df[group_mask]
+        
+        if len(group_df) > 0:
+            # Strongest candidate is the lead (already sorted, so it's the first one)
+            lead_idx = group_df.index[0]
+            best_freq = master_df.loc[lead_idx, args.freq_col]
+            lead_sigma = master_df.loc[lead_idx, args.sigma_col]
+            lead_file = master_df.loc[lead_idx, 'source_file']
+
+            if args.no_debug:
+                debug_content.append(f"\nGroup {gid}: Lead Freq {best_freq:.6f} Hz (Sigma: {lead_sigma:.2f}) in {lead_file}")
+                for idx, row in group_df.iloc[1:].iterrows():
+                    debug_content.append(f"  -> Match: {row[args.freq_col]:.6f} Hz (Sigma: {row[args.sigma_col]:.2f}) in {row['source_file']}")
+
+            # Update frequencies in master list
+            master_df.loc[group_mask, args.freq_col] = best_freq
+
+    # 4. Save results
+    if args.no_debug:
+        debug_path = os.path.join(args.output_dir, "harmonic_groups_debug.txt")
+        with open(debug_path, 'w') as f:
+            f.write("\n".join(debug_content))
+        print(f"Debug log saved to: {debug_path}")
+
+    for f_name in master_df['source_file'].unique():
+        file_out_data = master_df[master_df['source_file'] == f_name].copy()
+        file_out_data = file_out_data.drop(columns=['source_file', 'group_id'])
+        
+        out_path = os.path.join(args.output_dir, f_name)
+        file_out_data.to_csv(out_path, index=False)
+        print(f"Saved Synchronized File: {out_path}")
 
 if __name__ == "__main__":
     process_harmonics()

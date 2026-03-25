@@ -60,25 +60,40 @@ python3 parallel_harmonic_filter.py \
     --input_dir "$BASE_DIR/output/dm_split_results" \
     --tolerance "$H_TOLERANCE" \
     --harmonics $H_LIST \
-    --threads "$H_THREADS"
-echo "Step_4_IntraDM_Harmonic,$((SECONDS - START)),$?" >> "$TIMING_LOG"
+    --threads "$H_THREADS" \
+    --debug  # <--- Added debug flag here
+
+status=$?
+echo "Step_4_IntraDM_Harmonic,$((SECONDS - START)),$status" >> "$TIMING_LOG"
+
+if [ $status -eq 0 ]; then
+    echo "Debug files created in: $BASE_DIR/output/dm_filtered_results/debug_harmonics"
+fi
+
+# --- NEW DIRECTORY SETUP ---
+SYNC_DIR="$BASE_DIR/output/dm_synchronized_results"
 
 echo "Step 5: Harmonic Synchronization (Cross-DM)..."
 START=$SECONDS
 python3 process_harmonics.py \
     --input_dir "$BASE_DIR/output/dm_filtered_results/" \
+    --output_dir "$SYNC_DIR" \
     --tol "$H_TOLERANCE" \
     --harmonics $H_LIST
+    # Debug is ON by default
+    
 echo "Step_5_CrossDM_Harmonic,$((SECONDS - START)),$?" >> "$TIMING_LOG"
 
+# --- IMPORTANT: UPDATE STEP 6 INPUT ---
 echo "Step 6: Final RFI Mitigation..."
 START=$SECONDS
 python3 rfi_dm_curve_filter.py \
-    --input_dir "$BASE_DIR/output/dm_filtered_results" \
+    --input_dir "$SYNC_DIR" \  # Points to synchronized output now
     --output_file "$BASE_DIR/output/final_pulsar_candidates.csv" \
     --freq_tol "$FREQ_TOL" \
     --dm_persistence "$DM_PERSIST" \
     --peak_ratio "$PEAK_RATIO"
+
 echo "Step_6_RFI_Mitigation,$((SECONDS - START)),$?" >> "$TIMING_LOG"
 
 echo "Step 7: Running Parallel Accelsearch..."
