@@ -59,6 +59,7 @@ def mitigate_rfi():
 
         max_snr = group[sig_col].max()
         avg_snr = group[sig_col].mean()
+        min_snr = group[sig_col].min()
 
         # Test 1: Low persistence - likely a weak candidate, keep best instance
         if persistence < args.dm_persistence:
@@ -66,8 +67,9 @@ def mitigate_rfi():
             continue
 
         # Test 2: Peaked distribution check
-        is_peaked = max_snr > (avg_snr * args.peak_ratio)
-
+        # is_peaked = max_snr > (avg_snr * args.peak_ratio)
+        is_peaked = max_snr > (min_snr * args.peak_ratio)
+        
         # RFI Mitigation Logic
         if persistence > args.dm_persistence and not is_peaked:
             # Likely broadband RFI appearing across many DMs without a clear peak

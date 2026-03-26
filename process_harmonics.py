@@ -17,7 +17,8 @@ def process_harmonics():
     parser.set_defaults(no_debug=True)
 
     # Physics/Threshold Arguments
-    parser.add_argument("--tol", type=float, default=0.0001, help="Relative tolerance for harmonic matching")
+    # CHANGE: Tolerance is now interpreted as a percentage (e.g., 0.1 for 0.1%)
+    parser.add_argument("--f_tol_pct", type=float, default=0.1, help="Percentage tolerance for harmonic matching (e.g. 0.1 for 0.1%)")
     parser.add_argument("--harmonics", type=float, nargs='+',
                         default=[0.1, 0.111, 0.125, 0.142, 0.166, 0.2, 0.25, 0.333, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                         help="Space-separated list of harmonic multiples")
@@ -26,6 +27,9 @@ def process_harmonics():
     parser.add_argument("--sigma_col", type=str, default="sigma", help="Name of SNR/Sigma column")
 
     args = parser.parse_args()
+
+    # Convert percentage to a decimal ratio (e.g., 0.1% -> 0.001)
+    rel_tol = args.f_tol_pct / 100.0
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -56,7 +60,7 @@ def process_harmonics():
     group_counter = 0
 
     # 2. Identify Harmonic Groups
-    print(f"Processing {len(master_df)} rows for harmonic grouping...")
+    print(f"Processing {len(master_df)} rows for harmonic grouping (Tol: {args.f_tol_pct}%)...")
     
     # Sort by sigma descending so we find strongest leads first
     master_df = master_df.sort_values(by=args.sigma_col, ascending=False).reset_index(drop=True)
@@ -77,7 +81,8 @@ def process_harmonics():
 
             for n in args.harmonics:
                 target = base_freq * n
-                if target != 0 and abs(test_freq - target) / target < args.tol:
+                # Logic: Percentage difference between found freq and target harmonic
+                if target != 0 and abs(test_freq - target) / target <= rel_tol:
                     is_harmonic = True
                     break
 
@@ -95,7 +100,7 @@ def process_harmonics():
         group_df = master_df[group_mask]
         
         if len(group_df) > 0:
-            # Strongest candidate is the lead (already sorted, so it's the first one)
+            # Strongest candidate is the lead
             lead_idx = group_df.index[0]
             best_freq = master_df.loc[lead_idx, args.freq_col]
             lead_sigma = master_df.loc[lead_idx, args.sigma_col]
@@ -106,7 +111,7 @@ def process_harmonics():
                 for idx, row in group_df.iloc[1:].iterrows():
                     debug_content.append(f"  -> Match: {row[args.freq_col]:.6f} Hz (Sigma: {row[args.sigma_col]:.2f}) in {row['source_file']}")
 
-            # Update frequencies in master list
+            # Update frequencies in master list to match the lead frequency
             master_df.loc[group_mask, args.freq_col] = best_freq
 
     # 4. Save results
