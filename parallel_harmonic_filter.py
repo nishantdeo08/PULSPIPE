@@ -11,13 +11,15 @@ def get_harmonics(freq, factors):
 
 def process_single_dm(args_tuple):
     """Filter a single DM file"""
-    file_path, output_dir, tolerance, factors, freq_idx, debug = args_tuple
+    # tolerance here is now passed as the decimal ratio (e.g., 0.001 for 0.1%)
+    file_path, output_dir, rel_tol, factors, freq_idx, debug = args_tuple
     try:
         df = pd.read_csv(file_path)
         if df.empty:
             return None
 
         # Sort by sigma descending (strongest first)
+        # Using the first column for sorting as per your previous logic
         df = df.sort_values(by=df.columns[0], ascending=False).reset_index(drop=True)
 
         keep_indices = []
@@ -41,7 +43,8 @@ def process_single_dm(args_tuple):
 
                 check_freq = df.loc[j, freq_col]
                 for idx, h in enumerate(harmonics):
-                    if h != 0 and abs(check_freq - h) < (h * tolerance):
+                    # --- PERCENTAGE MATCH CHECK ---
+                    if h != 0 and abs(check_freq - h) <= (h * rel_tol):
                         discarded_indices.add(j)
                         
                         if debug:
@@ -72,21 +75,23 @@ def process_single_dm(args_tuple):
         return f"Error processing {os.path.basename(file_path)}: {e}"
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Parallel harmonic filtering of DM files")
+    parser = argparse.ArgumentParser(description="Parallel harmonic filtering of DM files (Percentage Based)")
 
     parser.add_argument("--input_dir", type=str, required=True, help="Directory containing DM-split CSV files")
     parser.add_argument("--output_dir", type=str, help="Custom output directory")
-    parser.add_argument("--tolerance", type=float, default=0.001, help="Harmonic matching tolerance")
+    # Changed from --tolerance to --f_tol_pct
+    parser.add_argument("--f_tol_pct", type=float, default=0.1, help="Harmonic matching tolerance in PERCENT (default: 0.1)")
     parser.add_argument("--harmonics", type=float, nargs='+',
                         default=[0.1, 0.111, 0.125, 0.142, 0.166, 0.2, 0.25, 0.333, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                         help="List of harmonic multiples")
     parser.add_argument("--freq_idx", type=int, default=6, help="0-based index of frequency column")
     parser.add_argument("--threads", type=int, default=None, help="Number of parallel processes")
-    
-    # New Debug Flag
-    parser.add_argument("--debug", action="store_true", help="Write debug files listing harmonic matches for each DM")
+    parser.add_argument("--debug", action="store_true", help="Write debug files")
 
     args = parser.parse_args()
+
+    # Convert percentage to decimal ratio once here
+    rel_tol = args.f_tol_pct / 100.0
 
     input_path = args.input_dir.rstrip("/")
     if not os.path.isdir(input_path):
@@ -101,10 +106,10 @@ if __name__ == "__main__":
         print("No CSV files found.")
         exit(1)
 
-    print(f"Starting parallel filtering on {len(file_list)} files...")
+    print(f"Starting parallel filtering on {len(file_list)} files using {args.f_tol_pct}% tolerance...")
 
-    # Updated pool_args to include args.debug
-    pool_args = [(f, output_path, args.tolerance, args.harmonics, args.freq_idx, args.debug) for f in file_list]
+    # Pass rel_tol (the decimal ratio) into the pool
+    pool_args = [(f, output_path, rel_tol, args.harmonics, args.freq_idx, args.debug) for f in file_list]
 
     with Pool(processes=args.threads) as pool:
         results = pool.map(process_single_dm, pool_args)

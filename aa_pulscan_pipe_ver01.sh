@@ -3,30 +3,32 @@
 # --- 1. USER CONFIGURATION ---
 # Added DM-specific arguments to the usage string
 # Usage: ./aa_pulscan_pipe.sh [data_path] [low_th] [high_th] [sort_col] [order_flag] [TARGET_DM] [DM_TOL] [DM_STEP]
-DATA_PATH=${1:-"/default/path/to/data.fil"}
+DATA_PATH=$1
 
 # Targeted DM Parameters (New)
-TARGET_DM=$2
-DM_TOL=$3
-DM_STEP=$4
+TARGET_DM=$6
+DM_TOL=$7
+DM_STEP=${8:-1}
 
-LOW_TH=${5:-5}
-HIGH_TH=${6:-100}
-SORT_COL=${7:-2}
-ORDER_FLAG=${8:-1}
+LOW_TH=${2:-5}
+HIGH_TH=${3:-100}
+SORT_COL=${4:-2}
+ORDER_FLAG=${5:-1}
 
 # --- 2. PIPELINE PARAMETERS ---
-#H_TOLERANCE=0.1
+H_TOLERANCE=0.1
 H_THREADS=32
 H_LIST="0.1 0.1111111111111111 0.125 0.14285714285714285 0.16666666666666666 0.2 0.25 0.3333333333333333 0.5 1 2 3 4 5 6 7 8 9 10"
 FREQ_TOL=0.1
 DM_PERSIST=0.1
 PEAK_RATIO=1.5
+NEIGHBORS=3
+PRESTO_THREADS=1
 
 # --- 3. PATH SETTINGS ---
 TEMPLATE_FILE="../../input_files/aa_test_input_file.txt"
 WORKING_FILE="../../input_files/aa_test_input_file_copy.txt"
-BASE_DIR="/lustre_archive/spotlight/Nishant/AA_PULSCAN_TEST/DATA"
+BASE_DIR="/lustre_archive/spotlight/Nishant/AA_PULSCAN_OUTPUT/DATA"
 OUTPUT_DIR="$BASE_DIR/output/aa_test_input_file_copy"
 
 # --- 4. PREPARATION & TARGETED DM LOGIC ---
@@ -83,10 +85,10 @@ echo "Step 4: Parallel Harmonic Filtering (Intra-DM)..."
 START=$SECONDS
 python3 parallel_harmonic_filter.py \
     --input_dir "$BASE_DIR/output/dm_split_results" \
-    --tolerance "$H_TOLERANCE" \
+    --f_tol_pct "$FREQ_TOL" \
     --harmonics $H_LIST \
     --threads "$H_THREADS" \
-    --debug  # <--- Added debug flag here
+    --debug
 
 status=$?
 echo "Step_4_IntraDM_Harmonic,$((SECONDS - START)),$status" >> "$TIMING_LOG"
@@ -104,7 +106,8 @@ python3 process_harmonics.py \
     --input_dir "$BASE_DIR/output/dm_filtered_results/" \
     --output_dir "$SYNC_DIR" \
     --f_tol_pct "$FREQ_TOL" \
-    --harmonics $H_LIST
+    --harmonics $H_LIST \
+    --debug
     # Debug is ON by default
     
 echo "Step_5_CrossDM_Harmonic,$((SECONDS - START)),$?" >> "$TIMING_LOG"
@@ -119,7 +122,7 @@ START=$SECONDS
 #     --dm_persistence "$DM_PERSIST" \
 #     --peak_ratio "$PEAK_RATIO"
 
-python3 rfi_dm_curve_filter_new.py \
+python3 rfi_dm_curve_new.py \
     --input_dir "$SYNC_DIR" \
     --output_file "$BASE_DIR/output/final_pulsar_candidates.csv" \
     --f_tol_pct "$FREQ_TOL" \
@@ -128,27 +131,48 @@ python3 rfi_dm_curve_filter_new.py \
 
 echo "Step_6_RFI_Mitigation,$((SECONDS - START)),$?" >> "$TIMING_LOG"
 
-echo "Step 7: Running Parallel Accelsearch..."
+# --- Step 7: Running Optimized Prepsubband + Parallel Accelsearch ---
+# This uses the new Python script that handles the 'Find Nearest' and 'dm_DM' naming
+echo "Step 7: Running Optimized Accelsearch Pipeline..."
 START=$SECONDS
-# Note: Adjust --cores to match your available hardware
-python3 run_accelsearch_new.py \
-    --input "$BASE_DIR/output/final_pulsar_candidates.csv" \
-    --fil "$DATA_PATH" \
-    --cores ""$H_THREADS"" \
-    --output "$BASE_DIR/output/accel_search_results"
+
+if [ -n "$TARGET_DM" ] && [ -n "$DM_TOL" ] && [ -n "$DM_STEP" ]; then
+    python3 run_accelsearch_new.py \
+        --input "$BASE_DIR/output/final_pulsar_candidates.csv" \
+        --fil "$DATA_PATH" \
+        --cores 32 \
+        --output "$BASE_DIR/output/accel_search_results" \
+        --dm_step "$DM_STEP" \
+        --tol "$DM_TOL"
+
+else
+    python3 run_accelsearch_new.py \
+        --input "$BASE_DIR/output/final_pulsar_candidates.csv" \
+        --fil "$DATA_PATH" \
+        --cores 32 \
+        --output "$BASE_DIR/output/accel_search_results"
+fi
+
 echo "Step_7_Accelsearch,$((SECONDS - START)),$?" >> "$TIMING_LOG"
 
+# --- Step 8: Validating Candidates & Generating Folding Commands ---
 echo "Step 8: Validating Candidates..."
 START=$SECONDS
-# f_tol=0.01Hz to match PRESTO results to AA candidates
-python3 candidate_validator.py \
+
+# We pass --fil here so the validator can include it in the prepfold commands it prints
+python3 candidate_folding.py \
     --input "$BASE_DIR/output/final_pulsar_candidates.csv" \
     --results "$BASE_DIR/output/accel_search_results/accel_results" \
-    --f_tol_pct "$FREQ_TOL"\
-    --output_csv "$BASE_DIR/output/verified_pulsar_candidates.csv"
+    --fil "$DATA_PATH" \
+    --dat_dir "$BASE_DIR/output/accel_search_results/dedispersed_timeseries" \
+    --f_tol_pct "$FREQ_TOL" \
+    --output_csv "$BASE_DIR/output/verified_pulsar_candidates.csv" \
+    --harmonics $H_LIST
+
 echo "Step_8_Validation,$((SECONDS - START)),$?" >> "$TIMING_LOG"
 
 echo "------------------------------------------------"
 echo "Pipeline Complete."
 echo "Verified Results: $BASE_DIR/output/verified_pulsar_candidates.csv"
+echo "To fold candidates, see the commands printed above or in the validation log."
 echo "Timing Log: $TIMING_LOG"
